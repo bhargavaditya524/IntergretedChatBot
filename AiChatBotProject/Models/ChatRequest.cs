@@ -1,7 +1,11 @@
-﻿namespace AiChatBotProject.Models
+﻿using System.ComponentModel.DataAnnotations;
+
+namespace AiChatBotProject.Models
 {
     public class ChatRequest
     {
-        public string Message { get; set; }
+        [Required]
+        [StringLength(4000)]
+        public string Message { get; set; } = string.Empty;
     }
 }

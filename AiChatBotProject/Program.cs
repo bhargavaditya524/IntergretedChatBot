@@ -6,27 +6,13 @@ builder.Services.AddControllersWithViews();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-builder.Services.AddSingleton<DeepSeekService>();
-
-//Add CORS
-builder.Services.AddCors(options =>
-{
-    options.AddPolicy("AllowAll",
-        builder =>
-        {
-            builder.AllowAnyOrigin()
-                   .AllowAnyMethod()
-                   .AllowAnyHeader();
-        });
-});
-
+builder.Services.AddHttpClient<DeepSeekService>();
+builder.Services.AddScoped<DocumentRagService>();
 
 var app = builder.Build();
 
 app.UseSwagger();
 app.UseSwaggerUI();
-//Enable CORS
-app.UseCors("AllowAll");
 // Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())
 {
@@ -49,3 +35,7 @@ app.MapControllerRoute(
 
 
 app.Run();
+
+public partial class Program
+{
+}
