@@ -67,6 +67,30 @@
             padding: 6px 12px; border-radius: 6px; cursor: pointer; font: inherit; font-size: .85rem;
         }
         header button:hover { color: var(--ink); }
+        .documents {
+            padding: 12px 20px;
+            border-bottom: 1px solid var(--line);
+            color: var(--muted);
+            font-size: .85rem;
+        }
+        .document-upload { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+        .document-upload input { min-width: 0; flex: 1; color: var(--ink); }
+        .document-upload button, .document-actions button {
+            padding: 5px 9px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            background: var(--panel);
+            color: var(--ink);
+            font: inherit;
+            cursor: pointer;
+        }
+        .document-upload button:disabled, .document-actions button:disabled { opacity: .5; cursor: wait; }
+        #documentStatus { margin: 8px 0 0; }
+        #documentStatus.error, .document-error { color: var(--error); }
+        #documentList { list-style: none; margin: 8px 0 0; padding: 0; }
+        #documentList li { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 4px 0; }
+        .document-name { color: var(--ink); overflow-wrap: anywhere; }
+        .document-actions { display: inline-flex; gap: 6px; margin-left: auto; }
         #messages {
             flex: 1;
             overflow-y: auto;
@@ -135,6 +159,16 @@
             <button type="button" id="clearBtn">Clear chat</button>
         </header>
 
+        <section class="documents" aria-label="Shared documents">
+            <form class="document-upload" id="documentForm">
+                <label for="documentFile">Knowledge base</label>
+                <input id="documentFile" type="file" accept=".pdf,.docx,.txt" aria-label="PDF, DOCX, or TXT document" />
+                <button type="submit" id="uploadBtn">Add document</button>
+            </form>
+            <p id="documentStatus" role="status">PDF, DOCX, or TXT; maximum 10 MB per file.</p>
+            <ul id="documentList" aria-label="Uploaded documents"></ul>
+        </section>
+
         <div id="messages" aria-live="polite">
             <div class="empty" id="empty">Ask a question to get started. Press Enter to send, Shift+Enter for a new line.</div>
         </div>
@@ -154,6 +188,93 @@
         const input = document.getElementById("input");
         const sendBtn = document.getElementById("sendBtn");
         const clearBtn = document.getElementById("clearBtn");
+        const documentForm = document.getElementById("documentForm");
+        const documentFile = document.getElementById("documentFile");
+        const uploadBtn = document.getElementById("uploadBtn");
+        const documentStatus = document.getElementById("documentStatus");
+        const documentList = document.getElementById("documentList");
+
+        async function responseError(response) {
+            try {
+                const data = await response.json();
+                return data.error || "Request failed with status " + response.status;
+            } catch {
+                return "Request failed with status " + response.status;
+            }
+        }
+
+        async function refreshDocuments() {
+            try {
+                const response = await fetch("/api/documents");
+                if (!response.ok) throw new Error(await responseError(response));
+                const documents = await response.json();
+                documentList.replaceChildren();
+
+                for (const documentInfo of documents) {
+                    const item = document.createElement("li");
+                    const name = document.createElement("span");
+                    name.className = "document-name";
+                    name.textContent = documentInfo.fileName;
+                    const state = document.createElement("span");
+                    state.className = documentInfo.status === "Failed" ? "document-error" : "";
+                    state.textContent = documentInfo.error
+                        ? documentInfo.status + ": " + documentInfo.error
+                        : documentInfo.status;
+                    item.append(name, state);
+
+                    const actions = document.createElement("span");
+                    actions.className = "document-actions";
+                    if (documentInfo.status !== "Processing") {
+                        const retry = document.createElement("button");
+                        retry.type = "button";
+                        retry.textContent = documentInfo.status === "Failed" ? "Retry" : "Reindex";
+                        retry.addEventListener("click", () => reindexDocument(documentInfo.id, retry));
+                        actions.appendChild(retry);
+                    }
+
+                    const remove = document.createElement("button");
+                    remove.type = "button";
+                    remove.textContent = "Remove";
+                    remove.addEventListener("click", () => deleteDocument(documentInfo.id, remove));
+                    actions.appendChild(remove);
+                    item.appendChild(actions);
+                    documentList.appendChild(item);
+                }
+            } catch (error) {
+                documentStatus.className = "error";
+                documentStatus.textContent = "Could not load documents: " + error.message;
+            }
+        }
+
+        async function reindexDocument(id, button) {
+            button.disabled = true;
+            try {
+                const response = await fetch("/api/documents/" + encodeURIComponent(id) + "/reindex", { method: "POST" });
+                if (!response.ok) throw new Error(await responseError(response));
+                documentStatus.className = "";
+                documentStatus.textContent = "Document indexed.";
+            } catch (error) {
+                documentStatus.className = "error";
+                documentStatus.textContent = error.message;
+            } finally {
+                await refreshDocuments();
+            }
+        }
+
+        async function deleteDocument(id, button) {
+            button.disabled = true;
+            try {
+                const response = await fetch("/api/documents/" + encodeURIComponent(id), { method: "DELETE" });
+                if (!response.ok) throw new Error(await responseError(response));
+                documentStatus.className = "";
+                documentStatus.textContent = "Document removed.";
+            } catch (error) {
+                documentStatus.className = "error";
+                documentStatus.textContent = error.message;
+            } finally {
+                await refreshDocuments();
+            }
+        }
 
         function addMessage(text, type) {
             if (emptyEl) emptyEl.remove();
@@ -187,10 +308,20 @@
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ message: text })
                 });
-                if (!res.ok) throw new Error("Server returned " + res.status);
+                if (!res.ok) throw new Error(await responseError(res));
                 const data = await res.json();
                 typing.className = "msg ai";
                 typing.textContent = data.ai ?? "(empty response)";
+                if (data.sources?.length) {
+                    const sourceText = data.sources
+                        .map(source => source.reference + " " + source.fileName +
+                            (source.pageNumber ? ", page " + source.pageNumber : ""))
+                        .join("; ");
+                    const sourceLine = document.createElement("small");
+                    sourceLine.textContent = "Sources: " + sourceText;
+                    typing.appendChild(document.createElement("br"));
+                    typing.appendChild(sourceLine);
+                }
             } catch (err) {
                 typing.className = "msg error";
                 typing.textContent = "Could not get a reply: " + err.message + ". Check the server and try again.";
@@ -213,6 +344,36 @@
         });
 
         clearBtn.addEventListener("click", () => location.reload());
+
+        documentForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const file = documentFile.files[0];
+            if (!file) {
+                documentStatus.className = "error";
+                documentStatus.textContent = "Choose a PDF, DOCX, or TXT file first.";
+                return;
+            }
+
+            uploadBtn.disabled = true;
+            documentStatus.className = "";
+            documentStatus.textContent = "Uploading and indexing " + file.name + "...";
+            try {
+                const formData = new FormData();
+                formData.append("file", file);
+                const response = await fetch("/api/documents", { method: "POST", body: formData });
+                if (!response.ok) throw new Error(await responseError(response));
+                documentStatus.textContent = "Document indexed.";
+                documentFile.value = "";
+            } catch (error) {
+                documentStatus.className = "error";
+                documentStatus.textContent = error.message;
+            } finally {
+                uploadBtn.disabled = false;
+                await refreshDocuments();
+            }
+        });
+
+        refreshDocuments();
     </script>
 </body>
 </html>
